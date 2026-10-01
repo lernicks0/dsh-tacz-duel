@@ -1,0 +1,27 @@
+modLoader="javafml"
+loaderVersion="[47,)"
+license="GPL-3.0-only"
+[[mods]]
+modId="dsh_tacz_bridge"
+version="0.1.0"
+displayName="DSH TACZ Client Bridge"
+displayTest="IGNORE_ALL_VERSION"
+description='''Local client control bridge for DeepSeek Harness TACZ practice and duels.'''
+[[dependencies.dsh_tacz_bridge]]
+modId="forge"
+mandatory=true
+versionRange="[47.4.0,48)"
+ordering="NONE"
+side="CLIENT"
+[[dependencies.dsh_tacz_bridge]]
+modId="minecraft"
+mandatory=true
+versionRange="[1.20.1,1.20.2)"
+ordering="NONE"
+side="CLIENT"
+[[dependencies.dsh_tacz_bridge]]
+modId="tacz"
+mandatory=true
+versionRange="[1.1.8,1.2)"
+ordering="AFTER"
+side="CLIENT"

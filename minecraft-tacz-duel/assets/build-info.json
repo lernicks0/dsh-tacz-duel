@@ -1,0 +1,14 @@
+{
+  "minecraft": "1.20.1",
+  "forgeBuild": "47.4.23",
+  "taczBuild": "1.1.8-hotfix",
+  "bridgeVersion": "0.1.0",
+  "jarSha256": "c18467b30b6a2c1df4832258fe5c88189267bca376cf9be82ca6ea0610cac3db",
+  "verification": {
+    "forgeGradleBuildAndReobf": "passed",
+    "strategyTests": "11 passed",
+    "angleMathTests": "passed with Java 17",
+    "cliAgainstSimulatedNativeBridge": "passed",
+    "actualMinecraftDuels": "not performed; bot instance and opponent nickname not supplied"
+  }
+}

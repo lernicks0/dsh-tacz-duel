@@ -1,0 +1,13 @@
+{
+  "name": "dsh-tacz-duel",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "GPL-3.0-only",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test tests/duel-core.test.mjs && node tests/cli-integration.mjs"
+  }
+}

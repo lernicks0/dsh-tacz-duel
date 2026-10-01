@@ -1,0 +1,19 @@
+# Credentials and local game/session data
+**/.runtime/
+**/session.json
+**/experience.jsonl
+.env
+.env.*
+*.log
+# Build caches and third-party mod dependencies
+**/.gradle/
+**/build/
+**/forge/libs/
+.test-classes/
+tests/.tmp/
+node_modules/
+# Editor/OS files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

@@ -1,0 +1,25 @@
+name: Tests
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  controllers:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - run: npm test
+      - run: javac -d .test-classes minecraft-tacz-duel/forge/src/main/java/dev/dsh/tacz/AimMath.java tests/AimMathTest.java
+      - run: java -cp .test-classes AimMathTest
