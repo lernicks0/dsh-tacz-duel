@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { DuelBrain, profiles, validatePolicy, nominalWeapon } from './duel-core.mjs';
+import { readSession, invoke, connect, readiness } from './bridge-client.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -12,26 +13,22 @@ const options = {};
 try {
   while (args.length) {
     const key = args.shift();
-    if (!['--session', '--runtime', '--opponent', '--seconds', '--difficulty', '--file', '--json', '--config'].includes(key) || !args.length || Object.hasOwn(options, key)) throw new Error(`Invalid option: ${key}`);
+    if (!['--session', '--runtime', '--opponent', '--seconds', '--difficulty', '--file', '--json', '--config', '--instance', '--bot'].includes(key) || !args.length || Object.hasOwn(options, key)) throw new Error(`Invalid option: ${key}`);
     options[key] = args.shift();
   }
 } catch (error) { console.error(JSON.stringify({ ok: false, error: error.message })); process.exit(1); }
 const runtime = path.resolve(options['--runtime'] ?? path.join(root, '.runtime'));
-const sessionPath = options['--session'] ? path.resolve(options['--session']) : null;
+const sessionPath = path.resolve(options['--session'] ?? path.join(runtime, 'bot-session.json'));
 const session = async () => {
-  if (!sessionPath) throw new Error('--session must point to the BOT game instance config/dsh-tacz-bridge/session.json');
-  const s = JSON.parse(await fs.readFile(sessionPath, 'utf8'));
-  if (s.bridge !== 'dsh-tacz-bridge' || typeof s.token !== 'string' || !Number.isInteger(s.port) || s.port < 1 || s.port > 65535) throw new Error('Invalid TACZ bridge session file');
+  const s = await readSession(sessionPath).catch(error => {
+    if (error.code === 'ENOENT') throw new Error('Run connect --instance GAME_DIR --bot BOT_NICK first');
+    throw error;
+  });
+  if (options['--bot']) s.expectedUsername = options['--bot'];
   return s;
 };
 async function call(command, params = {}) {
-  const s = await session();
-  const response = await fetch(`http://127.0.0.1:${s.port}/call`, { method: 'POST',
-    headers: { authorization: `Bearer ${s.token}`, 'content-type': 'application/json' },
-    body: JSON.stringify({ action: command, args: params }), signal: AbortSignal.timeout(4000) });
-  const data = await response.json();
-  if (!response.ok || !data.ok) throw new Error(data.error ?? `HTTP ${response.status}`);
-  return data.value;
+  return invoke(await session(), command, params);
 }
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function writeJsonAtomic(destination, data) {
@@ -65,12 +62,15 @@ async function startDuel() {
   if (!Object.hasOwn(profiles, difficulty)) throw new Error('difficulty must be easy, normal or hard');
   await fs.mkdir(runtime, { recursive: true });
   const current = await call('observe');
-  if (current.armed) throw new Error('A duel is already armed; stop it before starting another');
-  if (current.state !== 'ready' || current.menuOpen || !current.gun) throw new Error('Bot must be alive, outside menus, and holding a TACZ gun');
+  const checked = readiness(current);
+  if (!checked.readyToStart) throw new Error(checked.blockers.join('; '));
+  if (opponent.toLowerCase() === current.username.toLowerCase()) throw new Error('Opponent must differ from the bot nickname');
+  const pinned = await session();
+  if (!pinned.expectedUsername) throw new Error('Run connect with the bot nickname before starting');
   const lockPath = path.join(runtime, 'runner.lock');
   const lock = await fs.open(lockPath, 'wx').catch(() => { throw new Error('Runner lock exists; inspect runner-status and clean a stale lock only after its process is gone'); });
   try {
-    const config = { opponent, seconds, difficulty, sessionPath, runtime };
+    const config = { opponent, seconds, difficulty, sessionPath, runtime, expectedUsername: pinned.expectedUsername };
     const configFile = path.join(runtime, 'runner-config.json');
     await fs.writeFile(configFile, JSON.stringify(config));
     await writeJsonAtomic(path.join(runtime, 'policy.json'), profiles[difficulty]);
@@ -103,16 +103,9 @@ async function runDuel() {
   const config = JSON.parse(await fs.readFile(path.resolve(options['--config']), 'utf8'));
   // run-duel is internal; paths are loaded from its generated configuration.
   const actualRuntime = path.resolve(config.runtime);
-  const oldSession = sessionPath;
-  if (oldSession) throw new Error('Internal run-duel uses only --config');
-  const s = JSON.parse(await fs.readFile(config.sessionPath, 'utf8'));
-  const invoke = async (command, params = {}) => {
-    const response = await fetch(`http://127.0.0.1:${s.port}/call`, { method: 'POST', headers: { authorization: `Bearer ${s.token}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ action: command, args: params }), signal: AbortSignal.timeout(4000) });
-    const value = await response.json();
-    if (!response.ok || !value.ok) throw new Error(value.error ?? `HTTP ${response.status}`);
-    return value.value;
-  };
+  const s = await readSession(config.sessionPath);
+  s.expectedUsername = config.expectedUsername;
+  const native = (command, params = {}) => invoke(s, command, params);
   const brain = new DuelBrain(profiles[config.difficulty]);
   const start = Date.now();
   const statusPath = path.join(actualRuntime, 'status.json');
@@ -124,25 +117,26 @@ async function runDuel() {
   process.on('SIGINT', () => { interrupted = true; });
   process.on('SIGTERM', () => { interrupted = true; });
   try {
-    latest = await invoke('arm', { opponent: config.opponent, seconds: config.seconds });
+    readiness(await native('observe'));
+    latest = await native('arm', { opponent: config.opponent, seconds: config.seconds });
     while (!interrupted && Date.now() - start < config.seconds * 1000) {
-      latest = await invoke('observe');
+      latest = await native('observe');
       try { brain.policy = { ...profiles[config.difficulty], ...validatePolicy(JSON.parse(await fs.readFile(path.join(actualRuntime, 'policy.json'), 'utf8'))) }; }
       catch (error) { throw new Error(`Invalid policy file: ${error.message}`); }
       if (previousHealth !== undefined && latest.health < previousHealth) damageTaken += previousHealth - latest.health;
       previousHealth = latest.health;
       const decision = brain.decide(latest, Date.now());
       if (decision.stop) { reason = decision.stop; break; }
-      await invoke('frame', decision.frame);
-      if (decision.reload) await invoke('reload');
-      else if (decision.bolt) await invoke('bolt');
+      await native('frame', decision.frame);
+      if (decision.reload) await native('reload');
+      else if (decision.bolt) await native('bolt');
       await writeJsonAtomic(statusPath, { running: true, pid: process.pid, opponent: config.opponent, secondsElapsed: Math.floor((Date.now() - start) / 1000), observation: latest });
       await delay(200);
     }
     if (interrupted) reason = 'Runner interrupted';
   } catch (error) { reason = error.message; }
   finally {
-    try { latest = await invoke('stop'); } catch {}
+    try { latest = await native('stop'); } catch {}
     const record = { time: new Date().toISOString(), opponent: config.opponent, difficulty: config.difficulty, secondsElapsed: (Date.now() - start) / 1000,
       gunId: latest?.gun?.gunId, shotsAccepted: latest?.shotsAccepted ?? 0, damageTaken, opponentDeathsObserved: latest?.opponentDeathsObserved ?? 0, reason };
     await fs.mkdir(path.join(actualRuntime, 'learning'), { recursive: true });
@@ -154,10 +148,13 @@ async function runDuel() {
   return { completed: true, reason };
 }
 async function main() {
-  if (action === 'help') return { usage: 'node tacz.mjs ACTION --session BOT_INSTANCE/config/dsh-tacz-bridge/session.json [options]',
-    actions: ['observe', 'catalog', 'learn', 'duel-start', 'runner-status', 'policy', 'stop', 'slot', 'reload', 'bolt', 'fire-select'],
+  if (action === 'help') return { usage: 'node tacz.mjs connect --instance GAME_DIR --bot BOT_NICK; then node tacz.mjs ACTION [options]',
+    actions: ['connect', 'prepare', 'check', 'observe', 'catalog', 'learn', 'duel-start', 'runner-status', 'policy', 'stop', 'slot', 'reload', 'bolt', 'fire-select'],
     duelOptions: '--opponent NICKNAME --seconds 180 --difficulty easy|normal|hard', requires: 'Node.js 22+, independent Forge 1.20.1 client with TACZ 1.1.8-hotfix and the bundled bridge mod' };
   if (action === 'run-duel') return runDuel();
+  if (action === 'connect') return connect(options['--instance'], options['--bot'], runtime);
+  if (action === 'check') return readiness(await call('observe'));
+  if (action === 'prepare') return prepare();
   if (action === 'duel-start') return startDuel();
   if (action === 'learn') return learn();
   if (action === 'runner-status') return JSON.parse(await fs.readFile(path.join(runtime, 'status.json'), 'utf8'));
@@ -168,6 +165,36 @@ async function main() {
     return { updated: true, policy: { ...current, ...policy } };
   }
   return call(action, await readParams());
+}
+async function prepare() {
+  let o = await call('observe');
+  let report = readiness(o);
+  if (o.state !== 'ready' || o.menuOpen || o.armed) return report;
+  const conventional = g => g && !(g.data?.charging && Object.keys(g.data.charging).length);
+  if (!conventional(o.gun)) {
+    const catalog = (await call('catalog')).map(nominalWeapon);
+    const candidates = (o.hotbar ?? []).filter(item => catalog.some(g => g.gunId === item.gunId && g.supportsDuelRunner));
+    candidates.sort((a, b) => Number(b.ammo > 0) - Number(a.ammo > 0) || a.slot - b.slot);
+    if (!candidates.length) return report;
+    await call('slot', { slot: candidates[0].slot });
+    await delay(300);
+  }
+  const end = Date.now() + 12000;
+  let reloadRequested = false, boltRequested = false;
+  while (Date.now() < end) {
+    o = await call('observe'); report = readiness(o);
+    if (report.readyToStart || o.state !== 'ready' || o.menuOpen || o.armed || !conventional(o.gun)) break;
+    const g = o.gun;
+    if (!g.drawing && !g.bolting && !g.reloading) {
+      if (!g.inventoryAmmo && g.ammo <= 0 && !g.chambered && g.canReload && !reloadRequested) {
+        await call('reload'); reloadRequested = true;
+      } else if (!g.inventoryAmmo && g.ammo > 0 && !g.chambered && o.lastShotResult === 'NEED_BOLT' && !boltRequested) {
+        await call('bolt'); boltRequested = true;
+      } else if (!reloadRequested && !g.canReload) break;
+    }
+    await delay(200);
+  }
+  return { ...report, reloadRequested, boltRequested };
 }
 try { console.log(JSON.stringify({ ok: true, value: await main() }, null, 2)); }
 catch (error) { console.error(JSON.stringify({ ok: false, error: error.message }, null, 2)); process.exitCode = 1; }

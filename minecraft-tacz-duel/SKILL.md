@@ -1,41 +1,109 @@
 ---
 name: minecraft-tacz-duel
-description: 让 DeepSeek Harness 学习 Minecraft 1.20.1 Forge 的 TACZ 枪包并用独立游戏角色与用户进行枪械对战。通过随附原生客户端桥接读取枪械和可见对手状态，控制瞄准、正常射击、换弹和移动，记录每局经验。
+description: 使用 DeepSeek Harness 操作 Minecraft Java 1.20.1 Forge TACZ 机器人客户端，与指定玩家进行枪械对战。适用于枪包学习、无限弹药箱识别、装备和换弹检查、自动瞄准射击、对战与复盘，通过随附原生客户端桥接执行。
 ---
 
-# TACZ 学习与对战
+# TACZ 对战：按顺序执行
 
-面向 Minecraft 1.20.1 Forge，配套桥接以 TACZ 1.1.8-hotfix / Forge 47.4.23 构建。先读 [references/setup.md](references/setup.md)。本技能通过安装了 TACZ 的独立游戏客户端操作正常玩家；原有 Mineflayer 版用于原版世界，不具备本技能的模组握手、枪包同步或枪械控制接口。不要把 Mineflayer 的 `attack` 或普通右键当成 TACZ 开火。
+你是游戏操作的执行者。用户说“和我玩/对战”时，实际执行下列步骤，直到成功启动对战或得到具体阻塞原因。不要只复述计划、展示命令或读完枪包就宣称开始。
 
-把命令中的 `SKILL_DIR` 替换为技能资源目录绝对路径，`BOT_SESSION` 替换为**机器人游戏实例**的 `config/dsh-tacz-bridge/session.json`。需要 Node.js >=22，无 npm 依赖。dsh 与机器人客户端应在同一台主机；本地令牌不发给用户或第三方。
+环境：MC Java 1.20.1、Forge 47.4.x、TACZ 1.1.8-hotfix、Node >=22、桥接 **0.1.1 且 ammoSchema=2**。角色由正在运行的 Forge 客户端提供；调用 DSH 不会创建角色。不要用 Mineflayer attack、普通右键或模型逐帧调用替代原生控制器。
 
-## 接入与学习
+沿用用户已提供的技能目录、游戏实例目录和双方准确昵称，不重复询问。比如机器人 deepseek、用户 lernicks 时，操作对象一直是 deepseek，攻击目标一直是 lernicks。即使两个客户端共用目录，也必须 connect 按昵称连接，不盲用共享 session.json。用户要求对战即授权攻击其指定游戏角色；默认普通难度、180 秒、死亡/停止结束，告知后继续，不再要求“确认开火”。不生成装备，不修改伤害/弹药，不攻击其他玩家。
 
-已有版本、昵称和实例路径直接沿用，只问缺失的必要信息。用户说“跟我对战”即授权在该对局中攻击用户指定角色；以其准确游戏昵称锁定目标，不扩大到其他玩家。用户未设规则时采用普通难度、当前装备、单局 180 秒或任一方死亡结束，先用简短说明告知默认值，无需反复确认。
+## 0. 定位技能与命令
 
-1. `node "SKILL_DIR/scripts/tacz.mjs" observe --session "BOT_SESSION"`，确认独立客户端已进入同一服务器、机器人名字不同于用户、`state=ready`、菜单关闭。连接或 API 不兼容先排查，禁止伪造枪械数据。
-2. `node "SKILL_DIR/scripts/tacz.mjs" learn --session "BOT_SESSION"`。读取当前实际加载的枪包，保存 `.runtime/learning/weapons.json` 和 `weapons.md`。按本次任务读取相关武器条目，掌握口径、弹匣、射速、射击模式、开镜/换弹、精度和后坐力字段。
-3. 学习记录中的数值为枪包基础数据；配件、Lua 脚本和服务器配置可能改变实际性能。先核对 `observe.gun` 的实际武器 ID、弹药、膛内状态、有效 RPM、射击模式和操作锁；不要声称读取数据等于经过实战训练。
-4. 开局前在机器人客户端的已有快捷栏选择并持有枪械；已开局时可用 `slot --json '{"slot":2}'` 调整 1–9 槽位，观察切枪完成再射击。不会生成枪械/弹药，不修改伤害、冷却或服务器验证。蓄力枪不由当前自动对战控制器处理，改选普通 TACZ 枪并说明原因。
+先读 [setup.md](references/setup.md)。找到实际加载的技能目录，确认 scripts/tacz.mjs 存在。以下为 PowerShell 示例，替换路径占位符后执行；同一轮所有命令使用相同变量和 runtime。
 
-## 与用户对战
-
-读 [references/combat.md](references/combat.md)。默认假定用户安排了允许对战的场地和装备；只询问实际缺失的场地/回合信息，不自动编辑世界或账号设置。
-
-```text
-node "SKILL_DIR/scripts/tacz.mjs" duel-start --session "BOT_SESSION" --opponent "用户游戏昵称" --seconds 180 --difficulty normal
-node "SKILL_DIR/scripts/tacz.mjs" runner-status
-node "SKILL_DIR/scripts/tacz.mjs" observe --session "BOT_SESSION"
+```powershell
+$TaczSkill = "技能目录绝对路径"
+$TaczCli = Join-Path $TaczSkill "scripts\tacz.mjs"
+$TaczRuntime = Join-Path $TaczSkill ".runtime"
+node --version
 ```
 
-后台控制器每约 200 毫秒读取状态，原生客户端按游戏 tick 有限速地转向并通过 TACZ 客户端 API 开火。dsh 负责阶段判断和调整策略，不以模型调用频率逐帧操作。控制器使用实际可见的对手信息；失去视线只短暂记住上次看到的位置，不追踪墙后的实时坐标，也不在目标遮挡时继续开火。
+Node 版本已满足无需 npm install。输出为 `{ok,value}`，后文的字段均在 value 内。ok=false 或退出码非零表示失败，不可当成功继续。不要原样执行占位符。如果工具每次开新的 shell，直接使用 CLI 和 runtime 的绝对路径，不假定上一条 shell 的变量还存在。
 
-根据实际观察决定远近距离、射击节奏、侧移和换弹。支持 `easy/normal/hard`，通过 [policy 接口](references/combat.md) 调整反应时间、转向速度、瞄准误差、偏好距离和点射节奏。当前控制器只做局部侧移/进退及简单碰撞、落差检查；复杂地图绕行、掩体选择与弹道预判尚需扩展。不能把基础侧移描述为学会了整张地图战术。
+## 1. 按机器人昵称连接
 
-## 复盘与停止
+```powershell
+node $TaczCli connect --instance "机器人实例绝对路径" --bot "机器人准确昵称" --runtime $TaczRuntime
+node $TaczCli observe --runtime $TaczRuntime
+```
 
-每局结束读取 `.runtime/learning/experience.jsonl` 和 `.runtime/status.json`。区分 `shotsAccepted`（TACZ 接受的射击触发次数，连发可能发出多发）、自身生命损失、观察到的对手死亡和服务器核实的胜负。没有命中确认就不计算命中率，不把发包成功当成击杀。
+核对 connected=true，bot/observe.username 等于机器人昵称。connect 只读探测并固定连接，控制请求再核对身份。用户名错误立即重新连接，不能把机器人参数改成用户昵称来消除错误。
 
-用户要求“停/暂停/休战”时立即 `node "SKILL_DIR/scripts/tacz.mjs" stop --session "BOT_SESSION"`，再确认 `armed=false`。停止不会登出游戏。控制器反馈中断时，输入控制租约最多 600 毫秒；超时释放按键和瞄准。退出游戏、打开菜单、机器人死亡或对局时间到都会停止当前对局。
+- not-in-world：客户端没进入世界，让机器人进入同一服务器，再继续。启动到主菜单不算进入。
+- Old bridge：更新 JAR 并重启游戏再 connect；只改技能文本不会更新 Java 代码。
+- 未找到机器人：核对实例目录、昵称、mods 与日志，诊断一次后报告缺项，不盲目重复。
+- 多个同名客户端：让用户关闭重复窗口，不随便选一个。
 
-只根据实战记录做小幅可解释调整，保存枪械与策略心得到用户工作目录的 `tacz-progress.md`。更换枪包或 TACZ 版本后重新 learn，标明之前的经验是否仍适用。此技能积累的是可复用的武器数据与对局经验，不会修改模型权重。没有在用户服务器实测时，明确报告未验证的部分。
+runtime/bot-session.json 包含私有令牌，不展示内容、不上传。重启 Minecraft 后端口/令牌改变，必须重新 connect。
+
+## 2. 学习当前实际加载的枪包
+
+```powershell
+node $TaczCli learn --runtime $TaczRuntime
+```
+
+确认 weaponCount>0。从返回 catalogPath 读取当前持枪/快捷栏枪的条目，理解 ammoId、弹匣、射速、模式、换弹、拉栓、散布与后坐力。基础数值不是配件/脚本修改后的实况，实时持枪以 observe 为准。只读枪包叫“已读取枪包”，不叫“实战训练成功”。
+
+## 3. 准备装备，核对无限弹药箱
+
+```powershell
+node $TaczCli prepare --runtime $TaczRuntime
+node $TaczCli check --runtime $TaczRuntime
+```
+
+prepare 从已有快捷栏选普通 TACZ 枪；空枪有可用备弹时请求原生换弹，最多等 12 秒，再返回检查结果。不会开局、移动或射击。没有枪就让用户把枪放进机器人快捷栏再 prepare，不能凭空获得物品。
+
+**无限箱靠 TACZ IAmmoBox 接口识别，不猜中文名称、外观或一个很大的数字。** 先看 check.ammoBoxes 是否存在箱，再看 ammoSupply 是否真的供给当前枪。
+
+| 字段 | 含义与动作 |
+|---|---|
+| ammoBoxes[].infinite=true | 确实检测到无限箱；count=null 表示无限，不是 0 |
+| allTypes=true | 全口径无限箱；仍须放在机器人可用背包 |
+| matchesHeldGun=false | 口径不匹配或没持枪；先装备，再核对 ammoId 和 gunId |
+| usableForHeldGun=true | 此箱匹配当前枪且有弹药/无限备弹 |
+| ammoSupply.source=infinite_box 且 infinite=true | 当前枪确实使用无限箱备弹 |
+| source=gun_infinite_reload / creative_mode | 枪包无限备弹/创造模式，分别报告，不冒称检测到箱 |
+| source=dummy | 武器虚拟备弹，可能覆盖背包无限箱补给 |
+| canReload=false | 不等于没备弹：满弹匣、背包直读枪也会 false |
+| gun.ammo / chambered | 弹匣数量/枪膛，普通枪有无限备弹仍需换弹 |
+| inventoryAmmo=true | 背包直读枪，用 hasInventoryAmmo 判断能射击，不按 R 换弹 |
+
+箱在用户背包、地上或世界箱柜里不会自动供给机器人。只扫描机器人 Forge 物品接口暴露的背包，不能宣称扫描世界。箱存在但不可用，报告 ammoId、匹配状态、当前 gunId，让用户移入机器人背包/换匹配枪。不要让用户为能用的无限箱再找有限子弹。
+
+例：ammo=0、infinite=true、canReload=true → 有无限备弹，prepare 换弹后 check，不报“无弹药”，也不空枪开火。ammo=30、canReload=false、infinite=true → 已装填，能开局。普通无限箱不是无限弹匣。
+
+**check.readyToStart=true 才继续。** false 时逐项处理 blockers：关闭机器人聊天/背包/暂停菜单、复活、装备、等待动画、补给。失败时报告字段与具体原因，不跳过检查、伪造成功或无限重复 reload。
+
+## 4. 启动，并确认对战真的在运行
+
+```powershell
+node $TaczCli duel-start --opponent "用户准确昵称" --seconds 180 --difficulty normal --runtime $TaczRuntime
+node $TaczCli runner-status --runtime $TaczRuntime
+node $TaczCli observe --runtime $TaczRuntime
+```
+
+必须同时看到 started=true；runner-status.running=true 且 PID 与本次启动一致；observe.armed=true、username 是机器人、opponent 是用户。满足后才说“已开始对战”。旧 status 文件或只执行 learn 不算成功。
+
+后台控制器每约 200ms 观察，按游戏 tick 限速瞄准、点射、侧移、进退、换弹和拉栓。让它持续运行，DSH 负责监督和策略，不逐发调用模型，不立即 stop。用户没改变要求时，每约 5 秒读 runner-status，变化时再 observe，每 15–30 秒给一句简短状态。连续约 15 秒未见目标，可提示对手靠近机器人视野，保持当前有界对局，不无限重开。失去视线仅记住上次可见位置，不能定位/射击墙后实时目标。
+
+策略接口见 [combat.md](references/combat.md)。只有用户要求或实况支持才改一个或两个参数。死亡、菜单、断线、无有效补给、桥接错误或时限到会停止；读实际停止原因再处理。
+
+## 5. 停止与复盘
+
+用户说“停/暂停/休战”时立即执行，优先于所有学习与复盘：
+
+```powershell
+node $TaczCli stop --runtime $TaczRuntime
+node $TaczCli observe --runtime $TaczRuntime
+node $TaczCli runner-status --runtime $TaczRuntime
+```
+
+确认 armed=false，后台下一轮退出后 running=false。stop 释放控制但不登出，不杀 Java/其他 Node 进程，不自动重开。再战先复活、关菜单，再 prepare/check。
+
+读取 runtime/learning/experience.jsonl 最新记录，报告实际 gunId、时长、shotsAccepted、自身生命损失、观察到的对手死亡、停止原因。shotsAccepted 是 TACZ 接受的射击触发，不是命中数；不能杜撰命中率、击杀或比分。把可验证经验保存到用户工作目录 tacz-progress.md；更换枪包后重新 learn，不修改模型权重。
+
+当前只有局部移动和简单碰撞检查，没有复杂寻路/完整掩体规划，蓄力枪不支持自动对战。自动化测试通过不等于真实游戏实测；未实测时如实说明。

@@ -1,14 +1,17 @@
 {
+  "version": "0.1.1",
   "minecraft": "1.20.1",
-  "forgeBuild": "47.4.23",
-  "taczBuild": "1.1.8-hotfix",
-  "bridgeVersion": "0.1.0",
-  "jarSha256": "c18467b30b6a2c1df4832258fe5c88189267bca376cf9be82ca6ea0610cac3db",
-  "verification": {
-    "forgeGradleBuildAndReobf": "passed",
-    "strategyTests": "11 passed",
-    "angleMathTests": "passed with Java 17",
-    "cliAgainstSimulatedNativeBridge": "passed",
-    "actualMinecraftDuels": "not performed; bot instance and opponent nickname not supplied"
+  "forgeBuildBaseline": "47.4.23",
+  "taczBuildBaseline": "1.1.8-hotfix",
+  "ammoSchema": 2,
+  "artifact": "dsh-tacz-bridge-1.20.1-0.1.1.jar",
+  "sha256": "b6a724c92df034c2c98dae118adea33afa5163a9f9afcecb9ae198e59f33f733",
+  "validation": {
+    "nativeCompileAndReobfuscation": "passed",
+    "nodeRegressionTests": "18 passed",
+    "twoClientSimulatedBridgeIntegration": "passed",
+    "javaAimMath": "passed",
+    "realMinecraftInfiniteBoxAndDuel": "not yet tested",
+    "windowsUpgradeInstaller": "passed: backup outside mods, one active bridge, runtime and unrelated mod preserved"
   }
 }

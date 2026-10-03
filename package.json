@@ -1,6 +1,6 @@
 {
   "name": "dsh-tacz-duel",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "license": "GPL-3.0-only",
@@ -8,6 +8,6 @@
     "node": ">=22"
   },
   "scripts": {
-    "test": "node --test tests/duel-core.test.mjs && node tests/cli-integration.mjs"
+    "test": "node --test tests/duel-core.test.mjs tests/ammo-regression.test.mjs && node tests/cli-integration.mjs"
   }
 }

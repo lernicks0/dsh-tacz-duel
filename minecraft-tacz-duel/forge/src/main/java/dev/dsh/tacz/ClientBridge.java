@@ -8,6 +8,10 @@ import com.tacz.guns.api.client.gameplay.IClientPlayerGunOperator;
 import com.tacz.guns.api.entity.IGunOperator;
 import com.tacz.guns.api.entity.ShootResult;
 import com.tacz.guns.api.item.IGun;
+import com.tacz.guns.api.item.IAmmo;
+import com.tacz.guns.api.item.IAmmoBox;
+import com.tacz.guns.api.item.gun.AbstractGunItem;
+import com.tacz.guns.util.AttachmentDataUtils;
 import com.tacz.guns.resource.pojo.data.gun.GunData;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.LocalPlayer;
@@ -21,6 +25,7 @@ import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 import net.minecraftforge.common.MinecraftForge;
+import net.minecraftforge.common.capabilities.ForgeCapabilities;
 import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.ModList;
@@ -79,13 +84,18 @@ public final class ClientBridge {
         session.addProperty("token", token);
         session.addProperty("pid", ProcessHandle.current().pid());
         session.addProperty("bridge", "dsh-tacz-bridge");
-        session.addProperty("version", "0.1.0");
+        session.addProperty("version", "0.1.1");
+        Path sessions = folder.resolve("sessions");
+        Files.createDirectories(sessions);
+        Path ownSession = sessions.resolve(ProcessHandle.current().pid() + ".json");
+        Files.writeString(ownSession, GSON.toJson(session), StandardCharsets.UTF_8);
         Files.writeString(folder.resolve("session.json"), GSON.toJson(session), StandardCharsets.UTF_8);
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             server.stop(0);
             try {
                 Path file = folder.resolve("session.json");
                 if (Files.exists(file) && Files.readString(file).contains(token)) Files.delete(file);
+                if (Files.exists(ownSession) && Files.readString(ownSession).contains(token)) Files.delete(ownSession);
             } catch (IOException ignored) {}
         }, "DSH-TACZ-shutdown"));
         System.out.println("DSH TACZ bridge ready: " + folder.resolve("session.json"));
@@ -131,6 +141,11 @@ public final class ClientBridge {
         String action = request.get("action").getAsString();
         JsonObject a = request.has("args") ? request.getAsJsonObject("args") : new JsonObject();
         if (action.equals("observe")) return observe();
+        if (!action.equals("catalog")) {
+            String actual = MC.player == null ? MC.getUser().getName() : MC.player.getGameProfile().getName();
+            if (!a.has("expectedUsername") || !actual.equalsIgnoreCase(a.get("expectedUsername").getAsString()))
+                throw new IllegalStateException("Client identity mismatch: reconnect using the bot nickname before controlling it");
+        }
         if (action.equals("stop")) { stop("User stop"); return observe(); }
         LocalPlayer player = MC.player;
         if (player == null || MC.level == null) throw new IllegalStateException("Join the duel server with the bot client first");
@@ -154,7 +169,10 @@ public final class ClientBridge {
             stopReason = "";
             return observe();
         }
-        if (!armed) throw new IllegalStateException("Arm a bounded duel against the named opponent first");
+        if (MC.screen != null || player.isDeadOrDying()) throw new IllegalStateException("Close menus and make the bot alive before controlling it");
+        // Equipping and reloading are preparation actions; movement and fire still require arm.
+        if (!armed && !action.equals("slot") && !action.equals("reload") && !action.equals("bolt") && !action.equals("fire-select"))
+            throw new IllegalStateException("Arm a bounded duel against the named opponent first");
         switch (action) {
             case "frame" -> {
                 number(a, "yaw", player.getYRot(), -100000, 100000);
@@ -277,7 +295,9 @@ public final class ClientBridge {
     }
     private JsonObject observe() {
         JsonObject result = new JsonObject();
-        result.addProperty("bridge", "dsh-tacz-bridge"); result.addProperty("version", "0.1.0");
+        result.addProperty("bridge", "dsh-tacz-bridge"); result.addProperty("version", "0.1.1");
+        result.addProperty("ammoSchema", 2);
+        result.addProperty("username", MC.player == null ? MC.getUser().getName() : MC.player.getGameProfile().getName());
         result.addProperty("minecraft", "1.20.1");
         result.addProperty("tacz", ModList.get().getModContainerById("tacz").map(c -> c.getModInfo().getVersion().toString()).orElse("missing"));
         result.addProperty("armed", armed); result.addProperty("opponent", opponent);
@@ -303,10 +323,22 @@ public final class ClientBridge {
         }
         result.add("hotbar", hotbar); result.addProperty("slot", p.getInventory().selected + 1);
         var stack = p.getMainHandItem(); IGun gun = IGun.getIGunOrNull(stack);
+        JsonObject supply = ammoSupply(p, stack, gun, result);
         if (gun != null) {
             JsonObject held = new JsonObject(); held.addProperty("gunId", gun.getGunId(stack).toString());
             held.addProperty("ammo", gun.getCurrentAmmoCount(stack)); held.addProperty("chambered", gun.hasBulletInBarrel(stack));
-            held.addProperty("inventoryAmmo", gun.useInventoryAmmo(stack)); held.addProperty("canReload", gun.hasInventoryAmmo(p, stack, true));
+            held.addProperty("inventoryAmmo", gun.useInventoryAmmo(stack));
+            held.add("ammoSupply", supply);
+            held.addProperty("hasReserveAmmo", supply.get("usable").getAsBoolean());
+            boolean direct = gun.useInventoryAmmo(stack);
+            boolean check = IGunOperator.fromLivingEntity(p).needCheckAmmo();
+            held.addProperty("hasInventoryAmmo", direct && gun.hasInventoryAmmo(p, stack, check));
+            var common = TimelessAPI.getCommonGunIndex(gun.getGunId(stack));
+            int capacity = common.map(index -> AttachmentDataUtils.getAmmoCountWithAttachment(stack, index.getGunData())).orElse(0);
+            held.addProperty("magazineCapacity", capacity);
+            boolean nativeReload = stack.getItem() instanceof AbstractGunItem item && item.canReload(p, stack);
+            held.addProperty("canReload", !direct && gun.getCurrentAmmoCount(stack) < capacity &&
+                supply.get("usable").getAsBoolean() && (!check || nativeReload));
             held.addProperty("rpm", gun.getRPM(stack)); held.addProperty("fireMode", gun.getFireMode(stack).name());
             IGunOperator sync = IGunOperator.fromLivingEntity(p);
             held.addProperty("reloading", sync.getSynReloadState().getStateType().isReloading());
@@ -324,6 +356,50 @@ public final class ClientBridge {
             result.add("visibleOpponent", visible);
         } else result.add("visibleOpponent", JsonNull.INSTANCE);
         return result;
+    }
+    private JsonObject ammoSupply(LocalPlayer p, net.minecraft.world.item.ItemStack held, IGun gun, JsonObject result) {
+        JsonArray boxes = new JsonArray();
+        long[] finite = {0};
+        boolean[] infiniteBox = {false};
+        p.getCapability(ForgeCapabilities.ITEM_HANDLER).ifPresent(cap -> {
+            for (int i = 0; i < cap.getSlots(); i++) {
+                var item = cap.getStackInSlot(i);
+                if (item.isEmpty()) continue;
+                if (item.getItem() instanceof IAmmo ammo && gun != null && ammo.isAmmoOfGun(held, item)) finite[0] += item.getCount();
+                if (!(item.getItem() instanceof IAmmoBox box)) continue;
+                boolean infinite = box.isCreative(item) || box.isAllTypeCreative(item);
+                boolean matches = gun != null && box.isAmmoBoxOfGun(held, item);
+                int count = box.getAmmoCount(item);
+                JsonObject row = new JsonObject();
+                row.addProperty("inventorySlot", i);
+                row.addProperty("item", BuiltInRegistries.ITEM.getKey(item.getItem()).toString());
+                row.addProperty("ammoId", box.getAmmoId(item).toString());
+                row.addProperty("infinite", infinite);
+                row.addProperty("allTypes", box.isAllTypeCreative(item));
+                row.add("count", infinite ? JsonNull.INSTANCE : new JsonPrimitive(count));
+                row.addProperty("matchesHeldGun", matches);
+                row.addProperty("usableForHeldGun", matches && (infinite || count > 0));
+                boxes.add(row);
+                if (matches) { if (infinite) infiniteBox[0] = true; else finite[0] += Math.max(0, count); }
+            }
+        });
+        result.add("ammoBoxes", boxes);
+        JsonObject supply = new JsonObject();
+        boolean creative = !IGunOperator.fromLivingEntity(p).needCheckAmmo();
+        boolean gunInfinite = gun != null && !gun.useInventoryAmmo(held) && TimelessAPI.getCommonGunIndex(gun.getGunId(held))
+            .map(index -> index.getGunData().getReloadData().isInfinite()).orElse(false);
+        boolean dummy = gun != null && gun.useDummyAmmo(held);
+        String source = creative ? "creative_mode" : gunInfinite ? "gun_infinite_reload" : dummy ? "dummy" : infiniteBox[0] ? "infinite_box" : "inventory";
+        boolean infinite = creative || gunInfinite || (!dummy && infiniteBox[0]);
+        long reserve = dummy ? Math.max(0, gun.getDummyAmmoAmount(held)) : finite[0];
+        supply.addProperty("source", source);
+        supply.addProperty("infinite", infinite);
+        supply.addProperty("usable", gun != null && (infinite || reserve > 0));
+        supply.add("reserveCount", infinite ? JsonNull.INSTANCE : new JsonPrimitive(reserve));
+        supply.addProperty("matchingFiniteInventoryAmmo", finite[0]);
+        supply.addProperty("matchingInfiniteBox", infiniteBox[0]);
+        supply.addProperty("usesDummyAmmo", dummy);
+        return supply;
     }
     private JsonArray catalog() {
         JsonArray result = new JsonArray();

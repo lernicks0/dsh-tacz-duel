@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { DuelBrain, profiles, aimAngles, nominalWeapon, validatePolicy } from '../minecraft-tacz-duel/scripts/duel-core.mjs';
 
 const observation = () => ({ state: 'ready', armed: true, menuOpen: false, health: 20, yaw: 0, pitch: 0,
-  eye: { x: 0, y: 65.6, z: 0 }, gun: { ammo: 30, chambered: true, canReload: true, reloading: false, drawing: false, bolting: false, data: { ammo_amount: 30 } },
+  eye: { x: 0, y: 65.6, z: 0 }, gun: { ammo: 30, chambered: true, canReload: true, hasReserveAmmo: true, reloading: false, drawing: false, bolting: false, data: { ammo_amount: 30 } },
   visibleOpponent: { aimPoint: { x: 0, y: 65.1, z: 12 }, distance: 12, dead: false } });
 
 test('Minecraft angle convention points forward and upwards correctly', () => {
@@ -35,7 +35,7 @@ test('empty magazine requests a bounded reload and suppresses firing', () => {
 });
 test('no reserve ammo ends the duel instead of endlessly reloading', () => {
   const brain = new DuelBrain();
-  const state = observation(); state.gun.ammo = 0; state.gun.chambered = false; state.gun.canReload = false;
+  const state = observation(); state.gun.ammo = 0; state.gun.chambered = false; state.gun.canReload = false; state.gun.hasReserveAmmo = false;
   assert.equal(brain.decide(state, 0).stop, undefined);
   assert.match(brain.decide(state, 2500).stop, /ammunition/);
 });

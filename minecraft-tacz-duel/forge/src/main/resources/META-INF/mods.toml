@@ -3,7 +3,7 @@ loaderVersion="[47,)"
 license="GPL-3.0-only"
 [[mods]]
 modId="dsh_tacz_bridge"
-version="0.1.0"
+version="0.1.1"
 displayName="DSH TACZ Client Bridge"
 displayTest="IGNORE_ALL_VERSION"
 description='''Local client control bridge for DeepSeek Harness TACZ practice and duels.'''

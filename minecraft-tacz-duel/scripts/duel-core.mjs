@@ -36,6 +36,7 @@ export class DuelBrain {
     this.lastSeenAt = null;
     this.lastPoint = null;
     this.noAmmoSince = null;
+    this.reloadStalledSince = null;
     this.nextReloadAt = 0;
     this.nextErrorAt = 0;
     this.error = { yaw: 0, pitch: 0 };
@@ -48,6 +49,8 @@ export class DuelBrain {
     const gun = observation.gun;
     if (!gun) return { stop: 'No TACZ gun held; choose an equipped hotbar gun', frame };
     if (gun.data?.charging && Object.keys(gun.data.charging).length) return { stop: 'Charging gun requires a separate control policy; equip a conventional TACZ gun', frame };
+    const reserve = gun.hasReserveAmmo === true || gun.ammoSupply?.usable === true;
+    const directSupply = gun.hasInventoryAmmo === true;
     const target = observation.visibleOpponent;
     if (target?.dead) return { stop: 'Observed opponent death', frame };
     if (target) {
@@ -67,7 +70,7 @@ export class DuelBrain {
       frame.left = p.strafe && Math.floor(now / 1600) % 2 === 0;
       frame.right = p.strafe && !frame.left;
       const burst = now % (p.burstMs + p.restMs) < p.burstMs;
-      frame.shoot = now - this.firstVisibleAt >= p.reactionMs && !gun.reloading && !gun.drawing && !gun.bolting && (gun.ammo > 0 || gun.chambered || gun.inventoryAmmo && gun.canReload) && burst;
+      frame.shoot = now - this.firstVisibleAt >= p.reactionMs && !gun.reloading && !gun.drawing && !gun.bolting && (gun.inventoryAmmo ? directSupply : gun.ammo > 0 || gun.chambered) && burst;
     } else {
       this.firstVisibleAt = null;
       // Keep only the last actually visible position; never consume hidden coordinates.
@@ -80,15 +83,19 @@ export class DuelBrain {
         frame.pitch = 0;
       }
     }
-    const empty = gun.inventoryAmmo ? !gun.canReload && !gun.chambered : gun.ammo <= 0 && !gun.chambered;
-    const magazine = gun.data?.ammo_amount;
+    const empty = gun.inventoryAmmo ? !directSupply : gun.ammo <= 0 && !gun.chambered;
+    const magazine = gun.magazineCapacity ?? gun.data?.ammo_amount;
     const low = typeof magazine === 'number' && gun.ammo < Math.max(1, Math.floor(magazine * 0.25));
-    if (empty && !gun.canReload) {
+    if (empty && !(gun.inventoryAmmo ? directSupply : reserve) && !gun.reloading && !gun.bolting && !gun.drawing) {
       this.noAmmoSince ??= now;
       if (now - this.noAmmoSince > 2000) return { stop: 'No usable ammunition or reserve ammo', frame: { ...frame, shoot: false } };
     } else this.noAmmoSince = null;
+    if (empty && reserve && !gun.inventoryAmmo && !gun.reloading && !gun.drawing && !gun.bolting) {
+      this.reloadStalledSince ??= now;
+      if (now - this.reloadStalledSince > 15000) return { stop: 'Reserve ammunition exists, but reload did not fill the gun. Check TACZ reload locks or gun-pack scripts', frame: { ...frame, shoot: false } };
+    } else this.reloadStalledSince = null;
     let reload = false;
-    if (!gun.inventoryAmmo && !gun.reloading && gun.canReload && (empty || !target && low) && now >= this.nextReloadAt) {
+    if (!gun.inventoryAmmo && !gun.reloading && !gun.bolting && !gun.drawing && gun.canReload && (empty || !target && low) && now >= this.nextReloadAt) {
       reload = true;
       this.nextReloadAt = now + 1500;
       frame.shoot = false;
